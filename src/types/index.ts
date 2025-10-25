@@ -2,6 +2,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  phone?: string;
   avatar?: string;
   bio?: string;
   location?: string;
@@ -10,12 +11,39 @@ export interface User {
   following: number;
   postsCount: number;
   isVerified?: boolean;
+  isEmailVerified?: boolean;
+  isPhoneVerified?: boolean;
   socialLinks?: {
     website?: string;
     instagram?: string;
     twitter?: string;
     youtube?: string;
   };
+}
+
+export interface RegistrationData {
+  name: string;
+  email: string;
+  phone?: string;
+  password: string;
+  confirmPassword: string;
+  termsAccepted: boolean;
+}
+
+export interface VerificationToken {
+  token: string;
+  type: 'email' | 'phone';
+  expiresAt: Date;
+  userId: string;
+}
+
+export interface PasswordRequirements {
+  minLength: boolean;
+  hasUppercase: boolean;
+  hasLowercase: boolean;
+  hasNumbers: boolean;
+  hasSymbols: boolean;
+  isStrong: boolean;
 }
 
 export interface BlogPost {
