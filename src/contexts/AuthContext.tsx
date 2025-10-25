@@ -1,235 +1,173 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { AuthState, User, RegistrationData, VerificationToken } from '../types';
-import { mockUser } from '../data/mockData';
-import { hashPassword, verifyPassword, generateVerificationToken, isValidEmail, isValidPhone } from '../utils/security';
+import { registerUser, loginUser, verifyToken, logoutUser } from '../services/authApi';
 
-interface AuthContextType extends AuthState {
+interface User {
+  id: string;
+  email: string;
+  username: string;
+  phone?: string;
+}
+
+interface AuthContextType {
+  user: User | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  error: string | null;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-  register: (registrationData: RegistrationData) => Promise<void>;
-  sendVerificationEmail: (email: string) => Promise<void>;
-  verifyEmail: (token: string) => Promise<void>;
-  sendVerificationSMS: (phone: string) => Promise<void>;
-  verifyPhone: (token: string) => Promise<void>;
-  resendVerification: (type: 'email' | 'phone', identifier: string) => Promise<void>;
+  register: (data: RegisterData) => Promise<void>;
+  logout: () => Promise<void>;
+  clearError: () => void;
+}
+
+interface RegisterData {
+  email: string;
+  name: string;
+  password: string;
+  confirmPassword: string;
+  phone: string;
+  termsAccepted: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [authState, setAuthState] = useState<AuthState>({
-    user: null,
-    isAuthenticated: false,
-    isLoading: true,
-  });
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // In-memory storage for demo purposes - in production, this would be in a database
-  const [pendingVerifications, setPendingVerifications] = useState<Map<string, VerificationToken>>(new Map());
-
+  // Check if user is already logged in on mount
   useEffect(() => {
-    // Simulate checking for existing auth token
-    const token = localStorage.getItem('auth-token');
-    if (token) {
-      setAuthState({
-        user: mockUser,
-        isAuthenticated: true,
-        isLoading: false,
-      });
-    } else {
-      setAuthState({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-      });
-    }
+    const initializeAuth = async () => {
+      const token = localStorage.getItem('token');
+      
+      if (token) {
+        try {
+          const response = await verifyToken(token);
+          setUser(response.data.user);
+        } catch (err) {
+          // Token is invalid, remove it
+          localStorage.removeItem('token');
+          console.error('Token verification failed:', err);
+        }
+      }
+      
+      setIsLoading(false);
+    };
+
+    initializeAuth();
   }, []);
 
   const login = async (email: string, password: string) => {
-    setAuthState(prev => ({ ...prev, isLoading: true }));
-    
-    // Validate email format
-    if (!isValidEmail(email)) {
-      throw new Error('Invalid email format');
-    }
-    
-    // Simulate API call with password verification
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // In production, you would verify the password hash here
-    // const isValid = await verifyPassword(password, storedHash);
-    // if (!isValid) throw new Error('Invalid credentials');
-    
-    localStorage.setItem('auth-token', 'mock-token');
-    setAuthState({
-      user: mockUser,
-      isAuthenticated: true,
-      isLoading: false,
-    });
-  };
-
-  const logout = () => {
-    localStorage.removeItem('auth-token');
-    setAuthState({
-      user: null,
-      isAuthenticated: false,
-      isLoading: false,
-    });
-  };
-
-  const register = async (registrationData: RegistrationData) => {
-    setAuthState(prev => ({ ...prev, isLoading: true }));
+    setIsLoading(true);
+    setError(null);
     
     try {
-      // Validate input data
-      if (!registrationData.name.trim()) {
-        throw new Error('Name is required');
-      }
+      const response = await loginUser({ email, password });
       
-      if (!isValidEmail(registrationData.email)) {
-        throw new Error('Invalid email format');
+      if (response.data?.token) {
+        localStorage.setItem('token', response.data.token);
+        setUser(response.data.user);
+      } else {
+        throw new Error('Invalid response from server');
       }
-      
-      if (registrationData.phone && !isValidPhone(registrationData.phone)) {
-        throw new Error('Invalid phone number format');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Login failed';
+      setError(message);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const register = async (data: RegisterData) => {
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      // Validate passwords match
+      if (data.password !== data.confirmPassword) {
+        throw new Error('Passwords do not match');
       }
-      
-      if (!registrationData.termsAccepted) {
+
+      // Validate terms acceptance
+      if (!data.termsAccepted) {
         throw new Error('You must accept the terms and conditions');
       }
-      
-      // Hash the password
-      const hashedPassword = await hashPassword(registrationData.password);
-      
-      // Simulate API call to create user
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Create user with verification status
-      const newUser: User = {
-        ...mockUser,
-        name: registrationData.name.trim(),
-        email: registrationData.email.toLowerCase(),
-        phone: registrationData.phone,
-        isEmailVerified: false,
-        isPhoneVerified: false,
+
+      const mappedData = {
+        email: data.email,
+        username: data.name,
+        password: data.password,
+        confirmPassword: data.confirmPassword,
+        phone: data.phone || undefined,
       };
       
-      // Generate verification token for email
-      const emailToken = generateVerificationToken();
-      const verificationToken: VerificationToken = {
-        token: emailToken,
-        type: 'email',
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
-        userId: newUser.id,
-      };
+      const response = await registerUser(mappedData);
       
-      setPendingVerifications(prev => new Map(prev.set(registrationData.email, verificationToken)));
-      
-      // Send verification email
-      await sendVerificationEmail(registrationData.email);
-      
-      // Store user data temporarily (in production, this would be in database)
-      localStorage.setItem('pending-user', JSON.stringify(newUser));
-      
-      setAuthState({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-      });
-      
-    } catch (error) {
-      setAuthState(prev => ({ ...prev, isLoading: false }));
-      throw error;
+      if (response.data?.token) {
+        localStorage.setItem('token', response.data.token);
+        setUser(response.data.user);
+      } else {
+        throw new Error('Invalid response from server');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Registration failed';
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const sendVerificationEmail = async (email: string) => {
-    // Simulate sending verification email
-    await new Promise(resolve => setTimeout(resolve, 500));
-    console.log(`Verification email sent to ${email}`);
+  const logout = async () => {
+    setIsLoading(true);
+    
+    try {
+      const token = localStorage.getItem('token');
+      
+      if (token) {
+        // Optional: Call backend to invalidate token
+        await logoutUser(token);
+      }
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      // Always clear local state and storage
+      localStorage.removeItem('token');
+      setUser(null);
+      setError(null);
+      setIsLoading(false);
+    }
   };
 
-  const verifyEmail = async (token: string) => {
-    // Find the verification token
-    const verification = Array.from(pendingVerifications.values())
-      .find(v => v.token === token && v.type === 'email');
-    
-    if (!verification) {
-      throw new Error('Invalid verification token');
-    }
-    
-    if (verification.expiresAt < new Date()) {
-      throw new Error('Verification token has expired');
-    }
-    
-    // Get pending user data
-    const pendingUserData = localStorage.getItem('pending-user');
-    if (!pendingUserData) {
-      throw new Error('No pending registration found');
-    }
-    
-    const user: User = JSON.parse(pendingUserData);
-    user.isEmailVerified = true;
-    
-    // Remove from pending verifications
-    setPendingVerifications(prev => {
-      const newMap = new Map(prev);
-      newMap.delete(user.email);
-      return newMap;
-    });
-    
-    // Clear pending user data
-    localStorage.removeItem('pending-user');
-    
-    // Set user as authenticated
-    localStorage.setItem('auth-token', 'mock-token');
-    setAuthState({
-      user,
-      isAuthenticated: true,
-      isLoading: false,
-    });
+  const clearError = () => {
+    setError(null);
   };
 
-  const sendVerificationSMS = async (phone: string) => {
-    // Simulate sending SMS verification
-    await new Promise(resolve => setTimeout(resolve, 500));
-    console.log(`Verification SMS sent to ${phone}`);
-  };
-
-  const verifyPhone = async (token: string) => {
-    // Similar to email verification but for phone
-    // Implementation would be similar to verifyEmail
-    throw new Error('Phone verification not implemented in demo');
-  };
-
-  const resendVerification = async (type: 'email' | 'phone', identifier: string) => {
-    if (type === 'email') {
-      await sendVerificationEmail(identifier);
-    } else {
-      await sendVerificationSMS(identifier);
-    }
+  const value: AuthContextType = {
+    user,
+    isLoading,
+    isAuthenticated: !!user,
+    error,
+    login,
+    register,
+    logout,
+    clearError,
   };
 
   return (
-    <AuthContext.Provider value={{
-      ...authState,
-      login,
-      logout,
-      register,
-      sendVerificationEmail,
-      verifyEmail,
-      sendVerificationSMS,
-      verifyPhone,
-      resendVerification,
-    }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  
+  if (!context) {
+    throw new Error('useAuth must be used within AuthProvider');
+  }
+  
+  return context;
 };
